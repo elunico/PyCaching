@@ -52,6 +52,11 @@ FileName = str
 
 
 class CacheManager:
+    # TODO: raise more/better exceptions instead of catching and returning random numbers
+    # TODO: write documentation
+    # TODO: add types
+    # TODO: make note that (un)serialization can be customized by overwriting the serialize and unserialize methods
+    # maybe this should use injection or composition instead?
     def __init__(self, package_name, working_directory='.', perror=perror, automatic=True,
                  atexit=True):
         self._cache_seconds = 60 * 60 * 24
