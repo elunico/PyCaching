@@ -1,0 +1,6 @@
+load_content/
+venv/
+words/
+test.py
+source_files.txt
+__pycache__/
