@@ -173,12 +173,11 @@ class CacheManager:
                     path = os.path.join(self._cache_path, f)
                     if os.path.isfile(path):
                         s += os.path.getsize(path)
+                self._last_cache_size = s
+                return s
             except (IOError, OSError) as e:
-                self._perror(
-                    "An error occurred while getting cache size: {}".format(e))
-                raise  # return -22
-            self._last_cache_size = s
-            return s
+                raise OSError(
+                    "Failed to read cache size from disk") from e
 
     def _serialize(self, data):
         # use_bin_type tells msgpack to distinguish str and bytes
@@ -215,7 +214,7 @@ class CacheManager:
                     count += 1
                     debug('Removing {} because it is too old'.format(path), magenta)
                 except FileNotFoundError:
-                    debug('File {} in index but not found on delete. '.format(
+                    debug('File {} in index but not found on disk during deletion. '.format(
                         path), yellow)
 
             self._index = {k: v for (k, v) in entries}
@@ -232,7 +231,7 @@ class CacheManager:
                 try:
                     os.remove(path)
                 except FileNotFoundError:
-                    debug('File {} in index but not found on delete. '.format(
+                    debug('File {} in index but not found on disk during deletion. '.format(
                         path), yellow)
                     raise
 
@@ -266,10 +265,6 @@ class CacheManager:
         """
         THIS FUNCTION MUST BE CALLED BEFORE THE PROGRAM QUITS
         BUT NOT BEFORE ANY FURTHER ACTION IS TAKEN ON THE CACHE
-        IT IS CALLED, CURRENTLY RIGHT BEFORE THE PROGRAM EXISTS
-        AFTER dispatch() IN guppy.py
-        IT WRITES THE INDEX OF THE CACHE OUT AND WITHOUT THE
-        CACHE CANNOT PRUNE ITSELF
         """
         with self._cache_lock:
             try:
@@ -277,8 +272,7 @@ class CacheManager:
                     f.write(self._serialize(self._index))
                 return 0
             except (IOError, OSError) as e:
-                perror("Error saving cache: {}".format(e))
-                return 9
+                raise OSError("Could not write cache") from e
 
     def clear(self):
         c = 0
@@ -288,8 +282,8 @@ class CacheManager:
                 c += 1
             self._index = {}
         except (OSError, IOError) as e:
-            perror('An error occurred while clearing the cache: {}'.format(e))
-            return -21
+            raise OSError("Could not clear cache") from e
+
         return c
 
 
@@ -299,13 +293,13 @@ class CustomCached:
         self.cache = cache
 
     def __call__(self, fn):
-        self.cache = CacheManager(
-            fn.__name__) if self.cache is None else self.cache
+        if self.cache is None:
+            self.cache = CacheManager(fn.__name__)
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             if (cached_value := self.cache.retrieve_cached_item(self.file_namer(*args, **kwargs))) is not None:
-                print(cached_value)
+                # print(cached_value)
                 return cached_value
             value = fn(*args, **kwargs)
             path = self.file_namer(*args, **kwargs)
@@ -324,14 +318,4 @@ def cached(fn):
     def file_namer(*args):
         return f.sub('-', '_'.join(args))
 
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        if (cached_value := cache.retrieve_cached_item(file_namer(*args, **kwargs))) is not None:
-            print(cached_value)
-            return cached_value
-        value = fn(*args, **kwargs)
-        path = file_namer(*args, **kwargs)
-        cache.cache_item(path, value)
-        return value
-
-    return wrapper
+    return CustomCached(file_namer, cache)(fn)
