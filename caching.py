@@ -1,15 +1,15 @@
 import functools
+import json
 import os
 import os.path
 import re
-import sys
 import time
 import typing
 from threading import RLock
 from typing import Dict
-from colorcodes import *
 
 import msgpack
+from colorcodes import *
 
 # TODO: implement a @caching decorator that automatically caches function calls to the file system
 # TODO: add a class method to CacheManager that escapes text to be safely used in the filesystem paths
@@ -21,14 +21,17 @@ if os.environ.get('DEBUG', False):
     import inspect
     import os.path
 
+
     def line():
         return "{}:{}:{}".format(os.path.split(inspect.stack()[2][1])[-1], inspect.stack()[2][2], inspect.stack()[2][3])
+
 
     def debug(msg: str, color: ColorCode = yellow):
         print("{2}DEBUG: {0} {1}{3}".format(line(), msg, color, black))
 else:
     def line():
         return ''
+
 
     def debug(*args, **kwargs):
         pass
@@ -41,6 +44,33 @@ def perror(message: str):
 TimeStamp = float
 FileName = str
 
+class UnsynchronizedLock:
+    def __enter__(self):
+        pass
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+
+class MsgPackSerializer:
+    def serialize(self, data: typing.Any) -> bytes:
+        # use_bin_type tells msgpack to distinguish str and bytes
+        return msgpack.packb(data, use_bin_type=True)
+
+    def unserialize(self, data: bytes) -> typing.Any:
+        # raw=False tells msgpack to convert str back into str not keep as bytes
+        return msgpack.unpackb(data, raw=False)
+
+
+class JSONSerializer:
+    def serialize(self, data: typing.Any) -> bytes:
+        # use_bin_type tells msgpack to distinguish str and bytes
+        return json.dumps(data).encode('utf-8')
+
+    def unserialize(self, data: bytes) -> typing.Any:
+        # raw=False tells msgpack to convert str back into str not keep as bytes
+        return json.loads(data.decode('utf-8'))
+
 
 class CacheManager:
     # TODO: write documentation
@@ -52,7 +82,9 @@ class CacheManager:
                  working_directory: str = '.',
                  perror: typing.Callable[[str], None] = perror,
                  automatic: bool = True,
-                 atexit: bool = True):
+                 atexit: bool = True,
+                 lock=RLock(),
+                 serializer=MsgPackSerializer()):
         self._cache_seconds: int = 60 * 60 * 24
         self._max_cache_size: int = 1024 * 1024
         self._caching_active: bool = True
@@ -71,7 +103,8 @@ class CacheManager:
         self._last_cache_size: typing.Optional[int] = None
         self._perror: typing.Callable[[str], None] = perror
 
-        self._cache_lock: RLock = RLock()
+        self._cache_lock: RLock = lock
+        self._serializer = serializer
 
         self._index = {}
         debug(
@@ -191,12 +224,12 @@ class CacheManager:
     def _serialize(self, data: typing.Any) -> bytes:
         # use_bin_type tells msgpack to distinguish str and bytes
         with self._cache_lock:
-            return msgpack.packb(data, use_bin_type=True)
+            return self._serializer.serialize(data)
 
     def _unserialize(self, data: bytes) -> typing.Any:
         # raw=False tells msgpack to convert str back into str not keep as bytes
         with self._cache_lock:
-            return msgpack.unpackb(data, raw=False)
+            return self._serializer.unserialize(data)
 
     def _join_cache_path(self, *args: str) -> str:
         """returns the args path joined to cache_path. Used get the path to a cache file
@@ -218,7 +251,7 @@ class CacheManager:
             count = 0
             while len(entries) > 0 and now - entries[0][1] > self.cache_seconds:
                 path = self._join_cache_path(entries.pop(0)[0])
-                assert '.guppy' in path
+                assert self._package_name in path
                 try:
                     os.remove(path)
                     count += 1
@@ -303,7 +336,7 @@ class CacheManager:
 
 
 class CustomCached:
-    def __init__(self, file_namer: typing.Callable[[typing.Any], str], cache: CacheManager = None):
+    def __init__(self, file_namer: typing.Callable[[typing.Tuple[typing.Any]], str], cache: CacheManager = None):
         self.file_namer = file_namer
         self.cache = cache
 
