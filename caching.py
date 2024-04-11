@@ -1,5 +1,4 @@
 import functools
-import json
 import os
 import os.path
 import re
@@ -8,6 +7,7 @@ import time
 import typing
 from threading import RLock
 from typing import Dict
+from colorcodes import *
 
 import msgpack
 
@@ -15,38 +15,26 @@ import msgpack
 # TODO: add a class method to CacheManager that escapes text to be safely used in the filesystem paths
 # TODO: make the commit() method harder to forget
 
-magenta = '\033[95m'
-blue = '\033[94m'
-green = '\033[92m'
-yellow = '\033[93m'
-red = '\033[91m'
-black = '\033[0m'
-bold = '\033[1m'
-uline = '\033[4m'
-PATH_ILLEGAL = re.compile(r'[:/?~`!@#$%^&*()+=\\|\[\]{}\'";<>.,]')
 
 if os.environ.get('DEBUG', False):
 
     import inspect
     import os.path
 
-
     def line():
         return "{}:{}:{}".format(os.path.split(inspect.stack()[2][1])[-1], inspect.stack()[2][2], inspect.stack()[2][3])
 
-
-    def debug(msg, color=yellow):
+    def debug(msg: str, color: ColorCode = yellow):
         print("{2}DEBUG: {0} {1}{3}".format(line(), msg, color, black))
 else:
     def line():
         return ''
 
-
     def debug(*args, **kwargs):
         pass
 
 
-def perror(message):
+def perror(message: str):
     print(message, file=sys.stderr)
 
 
@@ -54,138 +42,112 @@ TimeStamp = float
 FileName = str
 
 
-class NoLock:
-    def __init__(self):
-        pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return False
-
-
-class MsgPackSerializer:
-    def serialize(self, data: typing.Any) -> bytes:
-        # use_bin_type tells msgpack to distinguish str and bytes
-        return msgpack.packb(data, use_bin_type=True)
-
-    def unserialize(self, data: bytes) -> typing.Any:
-        # raw=False tells msgpack to convert str back into str not keep as bytes
-        return msgpack.unpackb(data, raw=False)
-
-
-class JSONSerializer:
-    def serialize(self, data: typing.Any) -> bytes:
-        text = json.dumps(data)
-        return text.encode('utf-8')
-
-    def unserialize(self, data: bytes) -> typing.Any:
-        s = str(data, encoding='utf-8')
-        return json.loads(s)
-
-
 class CacheManager:
-    # TODO: raise more/better exceptions instead of catching and returning random numbers
     # TODO: write documentation
     # TODO: add types
-    # TODO: make note that (un)serialization can be customized by overwriting the serialize and unserialize methods
+    # TODO: make note that (un)serialization can be customized by overwriting the _serialize and _unserialize methods
     # maybe this should use injection or composition instead?
-    def __init__(self, package_name, working_directory='.', perror=perror, automatic=True,
-                 atexit=True, lock=RLock(), serializer=MsgPackSerializer()):
-        self._cache_seconds = 60 * 60 * 24
-        self._max_cache_size = 1024 * 1024
-        self._caching_active = True
+    def __init__(self,
+                 package_name: str,
+                 working_directory: str = '.',
+                 perror: typing.Callable[[str], None] = perror,
+                 automatic: bool = True,
+                 atexit: bool = True):
+        self._cache_seconds: int = 60 * 60 * 24
+        self._max_cache_size: int = 1024 * 1024
+        self._caching_active: bool = True
 
-        self._working_directory = working_directory
-        self._package_name = package_name
-        self._cache_path = os.path.join(self._working_directory, self._package_name, 'caches')
-        self._state_path = os.path.join(self._working_directory, self._package_name, 'state')
-        self._size_path = os.path.join(self._working_directory, self._package_name, 'size')
-        self._index_path = os.path.join(self._working_directory, self._package_name, 'cache_index')
-        self._time_path = os.path.join(self._working_directory, self._package_name, 'max_seconds')
-        self._last_cache_size = None
-        self.perror = perror
+        self._working_directory: str = working_directory
+        self._package_name: str = package_name
 
-        self.cache_lock = lock
-        self.serializer = serializer
+        def pjoin(final):
+            return os.path.join(self._working_directory, self._package_name, final)
 
-        self.index = {}
+        self._cache_path: str = pjoin('caches')
+        self._state_path: str = pjoin('state')
+        self._size_path: str = pjoin('size')
+        self._index_path: str = pjoin('cache_index')
+        self._time_path: str = pjoin('max_seconds')
+        self._last_cache_size: typing.Optional[int] = None
+        self._perror: typing.Callable[[str], None] = perror
+
+        self._cache_lock: RLock = RLock()
+
+        self._index = {}
+        debug(
+            f"Created cache for package {package_name} with properties "
+            f"{self._cache_seconds=}, {self._max_cache_size=}, {self.caching_active=}")
 
         if automatic:
+            debug(f"Cache for {package_name} is starting up")
             self.startup()
 
         if atexit:
             import atexit as ae
+            debug(f"Registering atexit handler for {package_name}")
             ae.register(self.commit)
 
-    def _write_setting(self, filename, value):
-        with self.cache_lock:
+    def _write_setting(self, filename: str, value: typing.Any):
+        with self._cache_lock:
             with open(filename, 'w') as f:
                 f.write(str(value))
 
     @property
-    def caching_active(self):
+    def caching_active(self) -> bool:
         return self._caching_active
 
     @caching_active.setter
     def caching_active(self, value: bool):
         self._caching_active = value
+        debug(f"{self._package_name}: Setting caching_active to {value}")
         self._write_setting(self._state_path, 'start' if value else 'stop')
 
     @property
-    def max_cache_size(self):
+    def max_cache_size(self) -> int:
         return self._max_cache_size
 
     @max_cache_size.setter
     def max_cache_size(self, value: int):
         self._max_cache_size = value
+        debug(f"{self._package_name}: Setting max_cache_size to {value}")
         self._write_setting(self._size_path, value)
         self.prune_max_size()
 
     @property
-    def cache_seconds(self):
+    def cache_seconds(self) -> int:
         return self._cache_seconds
 
     @cache_seconds.setter
     def cache_seconds(self, value: int):
         self._cache_seconds = value
+        debug(f"{self._package_name}: Setting _cache_seconds to {value}")
         self._write_setting(self._time_path, value)
         self.prune_expired_caches()
 
     def startup(self):
-        with self.cache_lock:
-            self.init_index()
-            self.init_settings()
-            self.read_settings()
+        with self._cache_lock:
 
-    def init_index(self):
-        with self.cache_lock:
             # create dirs for cache storage
             if not os.path.isdir(self._cache_path):
                 os.makedirs(self._cache_path)
+
             # read in the index or create a blank one if none exists
             if not os.path.exists(self._index_path):
-                self.index: Dict[FileName, TimeStamp] = {}
+                debug(
+                    f'{self._package_name}: index path does not exist, starting fresh')
+                self._index: Dict[FileName, TimeStamp] = {}
             else:
+                debug(f"{self._package_name}: Index path exists")
                 with open(self._index_path, 'rb') as f:
-                    self.index = self.unserialize(f.read())
+                    self._index = self._unserialize(f.read())
 
-    def read_settings(self):
+            self._read_settings()
+
+    def _read_settings(self):
         # later we will read in the settings from these files
         # if the files are not present we first write defaults
         # this allows defaults to be present and prevents errors on first read
-        with self.cache_lock:
-            # read in settings
-            with open(self._state_path) as f:
-                self.caching_active = f.read() == 'start'
-            with open(self._size_path) as f:
-                self.max_cache_size = int(f.read())
-            with open(self._time_path) as f:
-                self.cache_seconds = int(f.read())
-
-    def init_settings(self):
-        with self.cache_lock:
+        with self._cache_lock:
             if not os.path.exists(self._state_path):
                 with open(self._state_path, 'w') as f:
                     f.write('start')
@@ -195,46 +157,57 @@ class CacheManager:
             if not os.path.exists(self._time_path):
                 with open(self._time_path, 'w') as f:
                     f.write('86400')
+            # read in settings
+            with open(self._state_path) as f:
+                self.caching_active = f.read() == 'start'
+            with open(self._size_path) as f:
+                self.max_cache_size = int(f.read())
+            with open(self._time_path) as f:
+                self.cache_seconds = int(f.read())
+            debug(
+                f"Read settings for {self._package_name} with properties "
+                f"{self._cache_seconds=}, {self._max_cache_size=}, {self.caching_active=}")
 
     @property
-    def recent_cache_size(self):
+    def recent_cache_size(self) -> int:
         if self._last_cache_size is None:
-            self._last_cache_size = self.retrieve_cache_size()
+            self._last_cache_size = self._retrieve_cache_size()
         return self._last_cache_size
 
-    def retrieve_cache_size(self):
-        with self.cache_lock:
+    def _retrieve_cache_size(self) -> int:
+        with self._cache_lock:
             s = 0
             try:
                 for f in os.listdir(self._cache_path):
                     path = os.path.join(self._cache_path, f)
                     if os.path.isfile(path):
                         s += os.path.getsize(path)
+                self._last_cache_size = s
+                return s
             except (IOError, OSError) as e:
-                self.perror("An error occurred while getting cache size: {}".format(e))
-                raise  # return -22
-            self._last_cache_size = s
-            return s
+                raise OSError(
+                    "Failed to read cache size from disk") from e
 
-    def serialize(self, data: typing.Any) -> bytes:
+    def _serialize(self, data: typing.Any) -> bytes:
         # use_bin_type tells msgpack to distinguish str and bytes
-        with self.cache_lock:
-            return self.serializer.serialize(data)
+        with self._cache_lock:
+            return msgpack.packb(data, use_bin_type=True)
 
-    def unserialize(self, data: bytes) -> typing.Any:
+    def _unserialize(self, data: bytes) -> typing.Any:
         # raw=False tells msgpack to convert str back into str not keep as bytes
-        with self.cache_lock:
-            return self.serializer.unserialize(data)
+        with self._cache_lock:
+            return msgpack.unpackb(data, raw=False)
 
-    def join_cache_path(self, *args):
+    def _join_cache_path(self, *args: str) -> str:
         """returns the args path joined to cache_path. Used get the path to a cache file
         given the filename only"""
         return os.path.join(self._cache_path, *args)
 
     # this function removes records that are too old (expired)
     def prune_expired_caches(self):
-        with self.cache_lock:
-            entries = sorted(list(self.index.items()), key=lambda x: x[1])
+        debug(f'{self._package_name}: pruning cache for date')
+        with self._cache_lock:
+            entries = sorted(list(self._index.items()), key=lambda x: x[1])
             now = time.time()
             # index is sorted by time, oldest times towards 0
             # while the oldest items are older than the MAX
@@ -244,121 +217,120 @@ class CacheManager:
                 debug('Pruning expired cache data. Please wait...', black)
             count = 0
             while len(entries) > 0 and now - entries[0][1] > self.cache_seconds:
-                path = self.join_cache_path(entries.pop(0)[0])
-                assert self._working_directory in path
-                assert self._package_name in path
+                path = self._join_cache_path(entries.pop(0)[0])
+                assert '.guppy' in path
                 try:
                     os.remove(path)
                     count += 1
                     debug('Removing {} because it is too old'.format(path), magenta)
                 except FileNotFoundError:
-                    debug('File {} in index but not found on delete. '.format(path), yellow)
-                    raise
+                    debug('File {} in index but not found on disk during deletion. '.format(
+                        path), yellow)
 
-            self.index = {k: v for (k, v) in entries}
+            self._index = {k: v for (k, v) in entries}
             if count > 0:
                 debug('Removed {} expired cache files'.format(count), green)
 
     def prune_max_size(self):
-        with self.cache_lock:
+        debug(f'{self._package_name}: pruning cache for size')
+        with self._cache_lock:
             # sort by time from lowest (oldest) to highest (newest)
-            entries = sorted(list(self.index.items()), key=lambda x: x[1])
-            while self.retrieve_cache_size() > self.max_cache_size and len(entries) > 0:
-                path = self.join_cache_path(entries.pop(0)[0])
+            entries = sorted(list(self._index.items()), key=lambda x: x[1])
+            while self._retrieve_cache_size() > self.max_cache_size and len(entries) > 0:
+                path = self._join_cache_path(entries.pop(0)[0])
                 assert self._package_name in path
                 try:
                     os.remove(path)
                 except FileNotFoundError:
-                    debug('File {} in index but not found on delete. '.format(path), yellow)
+                    debug('File {} in index but not found on disk during deletion. '.format(
+                        path), yellow)
                     raise
 
-            self.index = {k: v for (k, v) in entries}
+            self._index = {k: v for (k, v) in entries}
 
-    def cache_item(self, path, data):
+    def cache_item(self, path: str, data: typing.Any) -> typing.Optional[int]:
+        debug(f'{self._package_name}: Caching item to {path}')
         if not self.caching_active:
             perror("Attempt to cache item when caching inactive")
             return None
-        with self.cache_lock:
-            self.index[path] = time.time()
-            with open(self.join_cache_path(path), 'wb') as f:
-                num = f.write(self.serialize(data))
+        with self._cache_lock:
+            self._index[path] = time.time()
+            with open(self._join_cache_path(path), 'wb') as f:
+                num = f.write(self._serialize(data))
             self.prune_max_size()
             return num
 
     # this function, given the filename of a cache file,
     # returns the data in that file if it exists or None if it does not
 
-    def retrieve_item(self, path):
+    def retrieve_cached_item(self, path: str) -> typing.Optional[typing.Any]:
+        debug(f'{self._package_name}: Retrieving item at {path}')
         if not self.caching_active:
             perror("Attempt to retrieve cached item when caching inactive")
             return None
-        with self.cache_lock:
-            if os.path.exists(self.join_cache_path(path)):
-                with open(self.join_cache_path(path), 'rb') as f:
-                    return self.unserialize(f.read())
+        with self._cache_lock:
+            if os.path.exists(self._join_cache_path(path)):
+                with open(self._join_cache_path(path), 'rb') as f:
+                    return self._unserialize(f.read())
             return None
 
     def commit(self):
         """
         THIS FUNCTION MUST BE CALLED BEFORE THE PROGRAM QUITS
         BUT NOT BEFORE ANY FURTHER ACTION IS TAKEN ON THE CACHE
-        IT IS CALLED, CURRENTLY RIGHT BEFORE THE PROGRAM EXISTS
-        AFTER dispatch() IN guppy.py
-        IT WRITES THE INDEX OF THE CACHE OUT AND WITHOUT THE
-        CACHE CANNOT PRUNE ITSELF
         """
-        with self.cache_lock:
+        with self._cache_lock:
+            debug(f'{self._package_name}: performing commit()')
             try:
                 with open(self._index_path, 'wb') as f:
-                    f.write(self.serialize(self.index))
-                return 0
+                    f.write(self._serialize(self._index))
             except (IOError, OSError) as e:
-                perror("Error saving cache: {}".format(e))
-                raise
+                raise OSError("Could not write cache") from e
 
-    def clear(self):
+    def clear(self) -> int:
         c = 0
-        try:
-            for file in os.listdir(self._cache_path):
-                os.remove(self.join_cache_path(file))
-                c += 1
-            self.index = {}
-        except (OSError, IOError) as e:
-            perror('An error occurred while clearing the cache: {}'.format(e))
-            raise
-        return c
+        with self._cache_lock:
+            debug(f'{self._package_name}: clear() called')
+            try:
+                for file in os.listdir(self._cache_path):
+                    os.remove(self._join_cache_path(file))
+                    c += 1
+                self._index = {}
+            except (OSError, IOError) as e:
+                raise OSError("Could not clear cache") from e
 
-    def _pescape(self, s: str) -> str:
-        return ''.join(
-            [i for i in PATH_ILLEGAL.sub('-', str(s)) if i.isalnum() or i in {'_', '-'}])
-
-    def filename_for(self, s: typing.Any) -> str:
-        return self._pescape(str(type(s)) + "." + self._pescape(str(s)))
-
-    def filepath_for(self, o: typing.Any) -> str:
-        return self.join_cache_path(self._cache_path, self.filename_for(o))
+            return c
 
 
-# Qualified repo names (user/repo) are stored in files as `user-repo`
-# due to limitations of filesystems around files containing `/`
-############
+class CustomCached:
+    def __init__(self, file_namer: typing.Callable[[typing.Any], str], cache: CacheManager = None):
+        self.file_namer = file_namer
+        self.cache = cache
 
-
-def cached(file_namer: typing.Callable[[typing.Any], str], cache: CacheManager = None):
-    def inner(fn):
-        nonlocal cache
-        if cache is None:
-            cache = CacheManager(fn.__name__)
+    def __call__(self, fn):
+        if self.cache is None:
+            self.cache = CacheManager(fn.__name__)
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            if (cached_value := cache.retrieve_item(file_namer(*args, **kwargs))) is not None:
+            if (cached_value := self.cache.retrieve_cached_item(self.file_namer(*args, **kwargs))) is not None:
+                # print(cached_value)
                 return cached_value
             value = fn(*args, **kwargs)
-            path = file_namer(*args, **kwargs)
-            cache.cache_item(path, value)
+            path = self.file_namer(*args, **kwargs)
+            self.cache.cache_item(path, value)
             return value
 
         return wrapper
 
-    return inner
+
+f = re.compile(r'[/\\%?$#@!~`={\]\[{|"\':;<>]')
+
+
+def cached(fn):
+    cache = CacheManager(fn.__name__)
+
+    def file_namer(*args):
+        return f.sub('-', '_'.join(args))
+
+    return CustomCached(file_namer, cache)(fn)

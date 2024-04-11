@@ -1,1 +1,2 @@
 msgpack==1.0.7
+colorcodes-elunico==1.0.0
