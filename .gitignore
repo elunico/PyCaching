@@ -4,3 +4,5 @@ words/
 test.py
 source_files.txt
 __pycache__/
+fetch/
+cache_test

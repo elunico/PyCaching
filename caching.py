@@ -21,14 +21,17 @@ if os.environ.get('DEBUG', False):
     import inspect
     import os.path
 
+
     def line():
         return "{}:{}:{}".format(os.path.split(inspect.stack()[2][1])[-1], inspect.stack()[2][2], inspect.stack()[2][3])
+
 
     def debug(msg: str, color: ColorCode = yellow):
         print("{2}DEBUG: {0} {1}{3}".format(line(), msg, color, black))
 else:
     def line():
         return ''
+
 
     def debug(*args, **kwargs):
         pass
@@ -87,6 +90,9 @@ class CacheManager:
             debug(f"Registering atexit handler for {package_name}")
             ae.register(self.commit)
 
+    def _debug(self, message):
+        debug(f'{self._package_name}: ')
+
     def _write_setting(self, filename: str, value: typing.Any):
         with self._cache_lock:
             with open(filename, 'w') as f:
@@ -99,7 +105,7 @@ class CacheManager:
     @caching_active.setter
     def caching_active(self, value: bool):
         self._caching_active = value
-        debug(f"{self._package_name}: Setting caching_active to {value}")
+        self._debug(f"Setting caching_active to {value}")
         self._write_setting(self._state_path, 'start' if value else 'stop')
 
     @property
@@ -109,7 +115,7 @@ class CacheManager:
     @max_cache_size.setter
     def max_cache_size(self, value: int):
         self._max_cache_size = value
-        debug(f"{self._package_name}: Setting max_cache_size to {value}")
+        self._debug(f"Setting max_cache_size to {value}")
         self._write_setting(self._size_path, value)
         self.prune_max_size()
 
@@ -120,7 +126,7 @@ class CacheManager:
     @cache_seconds.setter
     def cache_seconds(self, value: int):
         self._cache_seconds = value
-        debug(f"{self._package_name}: Setting _cache_seconds to {value}")
+        self._debug(f"Setting _cache_seconds to {value}")
         self._write_setting(self._time_path, value)
         self.prune_expired_caches()
 
@@ -137,7 +143,7 @@ class CacheManager:
                     f'{self._package_name}: index path does not exist, starting fresh')
                 self._index: Dict[FileName, TimeStamp] = {}
             else:
-                debug(f"{self._package_name}: Index path exists")
+                self._debug(f"Index path exists")
                 with open(self._index_path, 'rb') as f:
                     self._index = self._unserialize(f.read())
 
@@ -205,7 +211,7 @@ class CacheManager:
 
     # this function removes records that are too old (expired)
     def prune_expired_caches(self):
-        debug(f'{self._package_name}: pruning cache for date')
+        self._debug(f' pruning cache for date')
         with self._cache_lock:
             entries = sorted(list(self._index.items()), key=lambda x: x[1])
             now = time.time()
@@ -218,21 +224,21 @@ class CacheManager:
             count = 0
             while len(entries) > 0 and now - entries[0][1] > self.cache_seconds:
                 path = self._join_cache_path(entries.pop(0)[0])
-                assert '.guppy' in path
+                assert self._package_name in path
                 try:
                     os.remove(path)
                     count += 1
-                    debug('Removing {} because it is too old'.format(path), magenta)
+                    self._debug('Removing {} because it is too old'.format(path), magenta)
                 except FileNotFoundError:
-                    debug('File {} in index but not found on disk during deletion. '.format(
+                    self._debug('File {} in index but not found on disk during deletion. '.format(
                         path), yellow)
 
             self._index = {k: v for (k, v) in entries}
             if count > 0:
-                debug('Removed {} expired cache files'.format(count), green)
+                self._debug('Removed {} expired cache files'.format(count), green)
 
     def prune_max_size(self):
-        debug(f'{self._package_name}: pruning cache for size')
+        self._debug(f'pruning cache for size')
         with self._cache_lock:
             # sort by time from lowest (oldest) to highest (newest)
             entries = sorted(list(self._index.items()), key=lambda x: x[1])
@@ -242,14 +248,14 @@ class CacheManager:
                 try:
                     os.remove(path)
                 except FileNotFoundError:
-                    debug('File {} in index but not found on disk during deletion. '.format(
+                    self._debug('File {} in index but not found on disk during deletion. '.format(
                         path), yellow)
                     raise
 
             self._index = {k: v for (k, v) in entries}
 
     def cache_item(self, path: str, data: typing.Any) -> typing.Optional[int]:
-        debug(f'{self._package_name}: Caching item to {path}')
+        self._debug(f'Caching item to {path}')
         if not self.caching_active:
             perror("Attempt to cache item when caching inactive")
             return None
@@ -264,7 +270,7 @@ class CacheManager:
     # returns the data in that file if it exists or None if it does not
 
     def retrieve_cached_item(self, path: str) -> typing.Optional[typing.Any]:
-        debug(f'{self._package_name}: Retrieving item at {path}')
+        self._debug(f'Retrieving item at {path}')
         if not self.caching_active:
             perror("Attempt to retrieve cached item when caching inactive")
             return None
@@ -280,7 +286,7 @@ class CacheManager:
         BUT NOT BEFORE ANY FURTHER ACTION IS TAKEN ON THE CACHE
         """
         with self._cache_lock:
-            debug(f'{self._package_name}: performing commit()')
+            self._debug(f'performing commit()')
             try:
                 with open(self._index_path, 'wb') as f:
                     f.write(self._serialize(self._index))
@@ -290,7 +296,7 @@ class CacheManager:
     def clear(self) -> int:
         c = 0
         with self._cache_lock:
-            debug(f'{self._package_name}: clear() called')
+            self._debug(f'clear() called')
             try:
                 for file in os.listdir(self._cache_path):
                     os.remove(self._join_cache_path(file))
@@ -324,7 +330,7 @@ class CustomCached:
         return wrapper
 
 
-f = re.compile(r'[/\\%?$#@!~`={\]\[{|"\':;<>]')
+f = re.compile(r'[/\\%?$#@!~`={\]\[|"\':;<>]')
 
 
 def cached(fn):
