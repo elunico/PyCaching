@@ -16,7 +16,8 @@ def main():
     urls = ['http://example.com', 'https://eluni.co', 'http://wikipedia.org']
 
     for i in range(20):
-        fetch(random.choice(urls))
+        print(fetch(random.choice(urls)))
+
 
 
 if __name__ == '__main__':
