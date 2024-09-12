@@ -6,3 +6,8 @@ source_files.txt
 __pycache__/
 fetch/
 cache_test
+.DS_Store
+.idea/
+build/
+dist/
+*.egg-info

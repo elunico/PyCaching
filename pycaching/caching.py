@@ -44,6 +44,7 @@ def perror(message: str):
 TimeStamp = float
 FileName = str
 
+
 class UnsynchronizedLock:
     def __enter__(self):
         pass
@@ -120,8 +121,8 @@ class CacheManager:
             debug(f"Registering atexit handler for {package_name}")
             ae.register(self.commit)
 
-    def _debug(self, message):
-        debug(f'{self._package_name}: ')
+    def _debug(self, message, color=black):
+        debug(f'{color}{self._package_name}: {message}')
 
     def _write_setting(self, filename: str, value: typing.Any):
         with self._cache_lock:
@@ -360,13 +361,13 @@ class CustomCached:
         return wrapper
 
 
-f = re.compile(r'[/\\%?$#@!~`={\]\[|"\':;<>]')
+flrepl = re.compile(r'[/\\%?$#@!~`={\]\[|"\':;<>]')
 
 
 def cached(fn):
     cache = CacheManager(fn.__name__)
 
     def file_namer(*args):
-        return f.sub('-', '_'.join(args))
+        return flrepl.sub('-', '_'.join(args))
 
     return CustomCached(file_namer, cache)(fn)

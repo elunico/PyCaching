@@ -1,0 +1,7 @@
+include README.md
+include caching.py
+recursive-exclude * __pycache__
+recursive-exclude * cache_test
+recursive-exclude * fetch
+recursive-exclude * venv
+recursive-exclude * .idea
