@@ -21,17 +21,14 @@ if os.environ.get('DEBUG', False):
     import inspect
     import os.path
 
-
     def line():
         return "{}:{}:{}".format(os.path.split(inspect.stack()[2][1])[-1], inspect.stack()[2][2], inspect.stack()[2][3])
-
 
     def debug(msg: str, color: ColorCode = yellow):
         print("{2}DEBUG: {0} {1}{3}".format(line(), msg, color, black))
 else:
     def line():
         return ''
-
 
     def debug(*args, **kwargs):
         pass
@@ -108,9 +105,10 @@ class CacheManager:
         self._serializer = serializer
 
         self._index = {}
-        debug(
-            f"Created cache for package {package_name} with properties "
-            f"{self._cache_seconds=}, {self._max_cache_size=}, {self.caching_active=}")
+        debug(f"Created cache for package "
+              f"{package_name} with properties "
+              f"{self._cache_seconds=}, {self._max_cache_size=}"
+              f", {self.caching_active=}")
 
         if automatic:
             debug(f"Cache for {package_name} is starting up")
@@ -170,8 +168,8 @@ class CacheManager:
 
             # read in the index or create a blank one if none exists
             if not os.path.exists(self._index_path):
-                debug(
-                    f'{self._package_name}: index path does not exist, starting fresh')
+                debug(f'{self._package_name}: index path does"
+                      " not exist, starting fresh')
                 self._index: Dict[FileName, TimeStamp] = {}
             else:
                 self._debug(f"Index path exists")
@@ -222,8 +220,7 @@ class CacheManager:
                 self._last_cache_size = s
                 return s
             except (IOError, OSError) as e:
-                raise OSError(
-                    "Failed to read cache size from disk") from e
+                raise OSError("Failed to read cache size from disk") from e
 
     def _serialize(self, data: typing.Any) -> bytes:
         # use_bin_type tells msgpack to distinguish str and bytes
@@ -259,14 +256,15 @@ class CacheManager:
                 try:
                     os.remove(path)
                     count += 1
-                    self._debug('Removing {} because it is too old'.format(path), magenta)
+                    msg = 'Removing {} because it is too old'.format(path)
+                    self._debug(msg, magenta)
                 except FileNotFoundError:
-                    self._debug('File {} in index but not found on disk during deletion. '.format(
-                        path), yellow)
+                    self._debug('File {} in index but not found '
+                                'on disk during deletion. '.format(path), yellow)
 
             self._index = {k: v for (k, v) in entries}
             if count > 0:
-                self._debug('Removed {} expired cache files'.format(count), green)
+                self._debug(f'Removed {count} expired cache files', green)
 
     def prune_max_size(self):
         self._debug(f'pruning cache for size')
@@ -279,8 +277,9 @@ class CacheManager:
                 try:
                     os.remove(path)
                 except FileNotFoundError:
-                    self._debug('File {} in index but not found on disk during deletion. '.format(
-                        path), yellow)
+                    self._debug('File {} in index but not '
+                                'found on disk during deletion. '.format(path),
+                                yellow)
                     raise
 
             self._index = {k: v for (k, v) in entries}
